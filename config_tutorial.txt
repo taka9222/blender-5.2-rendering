@@ -1,0 +1,151 @@
+Blender 5.2 Rendering 設定リファレンス
+========================================
+
+実行例:
+  blender -b -P render_object.py -- config_samples\bunny_monochrome.ini
+
+Windows で「blender が認識されていません」と表示される場合は、
+プロジェクトルートから次の補助ランチャーを使ってください。
+PATH または一般的なインストール先から Blender を探すため、
+PATH を恒久変更せずに実行できます。
+PowerShell:
+  .\run_blender.ps1 config_samples\bunny_monochrome.ini
+コマンドプロンプト:
+  run_blender.cmd config_samples\bunny_monochrome.ini
+
+Blender を起動して設定の読み込みだけ確認する場合:
+  .\run_blender.ps1 config_samples\bunny_monochrome.ini -ValidateOnly
+
+標準外の場所にインストールしている場合は blender.exe を明示します。
+  .\run_blender.ps1 config_samples\bunny_monochrome.ini -BlenderExe "D:\Apps\Blender 5.2\blender.exe"
+
+ランチャーからも見つからない場合は Blender 5.2 をインストールするか、
+Blender のインストールフォルダーをユーザー環境変数 Path に追加し、
+新しいターミナルを開いてください。
+
+設定ファイルの相対パスは、その INI ファイルがあるフォルダーを基準に
+解決します。複数の設定ファイルを指定すると、順番にレンダリングします。
+Blender を起動せずに参照ファイルまで確認する場合:
+  python render_object.py --validate-only config_samples\bunny_monochrome.ini
+
+セクション
+----------
+
+[settings]
+  object_file       必須。Sphere または読み込むモデルのパス。複数指定はカンマ区切り。
+                    OBJ / PLY / STL は Blender 5.2 標準インポーターを使用します。
+                    FBX / X3D は対応する I/O 拡張機能が有効な場合に利用できます。
+  working_dir       モデル、CSV、テクスチャ、HDRI を探すフォルダー。
+                    省略時は INI と同じフォルダー。
+  out_dir           出力フォルダー。省略時は INI と同じフォルダーの output。
+
+[rendering]
+  resolution_x, resolution_y   出力サイズ。既定値 640 x 480。
+  samples                      Cycles サンプル数。既定値 64。
+  device                       CPU または GPU。既定値 CPU。GPU が使えない場合は停止します。
+  max_bounces                  最大バウンス数。既定値 12。
+  min_light_bounces            最小ライトバウンス数。既定値 0。
+  min_bounces                  旧設定名。min_light_bounces として読み込みます。
+  glossy_bounces               Glossy の最大バウンス数。既定値 4。
+  transmission_bounces         Transmission の最大バウンス数。既定値 12。
+  volume_bounces               Volume の最大バウンス数。既定値 0。
+  transparent_max_bounces      透明面の最大バウンス数。既定値 8。
+  min_transparent_bounces      透明面の最小バウンス数。既定値 0。
+  transparent_min_bounces      旧設定名。min_transparent_bounces として読み込みます。
+  denoising                    Cycles デノイズを有効化。既定値 False。
+  denoising_legacy             旧設定との互換用。True の場合も同じデノイズを有効化。
+  color_mode                   BW、RGB、RGBA。既定値 RGB。
+  transparent_background       RGBA 画像の背景を透過。既定値 False。
+  disable_anti_aliasing        False 以外のときピクセルフィルター幅を小さくします。
+  background_color             0–255 の RGB または RGBA。例: 20, 20, 20。
+  use_hdri                     HDR / EXR などの環境画像。None または空欄で無効。
+  no_background                HDRI のカメラ表示だけを無効化します。
+  hdri_offset                  HDRI の回転オフセット [rad]。既定値 0。
+  synchronize_with_views       True の場合、複数ビューに合わせて HDRI を回転します。
+  save_exr                     HDR画像を保存します (experimental)  
+  tile_x, tile_y               旧設定との互換用。Blender 5.2 では無視されます。
+
+[light]
+  model                        distant (SUN) または near (POINT)。
+  energy                       光源エネルギー。既定値 1。
+  amount                       同時に配置する光源数。既定値 1。
+  SUN_angle                    SUN の角度 [rad]。既定値 0.00918。
+  POINT_size                   POINT の影のソフトサイズ。既定値 0.25。
+  POINT_radius                 角度サンプリング時の POINT 半径。既定値 5。
+  enable_rendering_by_degree   True または X/Y/Z で一周サンプリングを有効化。
+  degree                       サンプリング間隔 [deg]。360 を割り切れる正の値。
+  light_directions_file        一行ごとの光源設定 CSV。degree sampling が False の場合に使用。
+  file_normalization           distant の CSV の XYZ を方向ベクトルとして解釈します。
+  synchronize_with_views       True の場合、光源もオブジェクトとともに回転します。
+
+  CSV は各行に X,Y,Z または X,Y,Z,energy または
+  X,Y,Z,energy,angle_or_size を指定します。空欄の energy は設定値を使います。
+  distant で file_normalization=False の場合、XYZ は XYZ Euler 角 [rad]。
+  True の場合は光線方向ベクトルです。near の XYZ は光源位置です。
+  行数は amount で割り切れる必要があります。空行と # で始まるコメント行は無視します。
+  enable_rendering_by_degree=True のとき、CSV は読み込みません。
+  True は distant では Y 軸、near では Z 軸を使います。
+
+[camera]
+  model                        orthographic (ortho, o)、perspective (persp, p)、panorama (pano)。
+  location, rotation           カメラ位置 [m] と XYZ Euler 角 [rad]。既定値 0,0,10 / 0,0,0。
+  focal_length                 焦点距離 [mm]。既定値 50。
+  sensor_width, sensor_height  センサーサイズ [mm]。既定値 36 x 24。
+  clip_start, clip_end         クリップ範囲。
+  ortho_scale                  Orthographic スケール。
+  shift_x, shift_y             レンズシフト。
+  use_dof                      被写界深度を有効化。
+  focus_distance               ピント距離 [m]。
+  aperture_fstop               絞り値。
+  aperture_blades              絞り羽根の数。
+  aperture_rotation            絞り羽根の回転 [rad]。
+  aperture_ratio               絞りアスペクト比。
+
+[object]
+  preset                       オブジェクトごとの設定セクション名。カンマ区切り。
+                               数が少ない場合、最後の設定を複製します。
+  enable_multiple_views        True で複数ビューを生成します。
+  enable_rendering_by_degree   True または X/Y/Z で等間隔の回転を生成します。
+  degree                       ビューの回転間隔 [deg]。
+  object_directions_file       一行ごとに XYZ Euler 角 [rad] を指定する CSV。
+                               degree sampling が False の場合に使用します。
+
+[object_sphere] (Sphere 用)
+  segments, ring_count         球の分割数。既定値 32, 16。
+  radius                       半径。既定値 1。
+  location, rotation           位置 [m] と XYZ Euler 角 [rad]。
+  use_smooth                   面をスムーズシェーディングします。
+  subdivision_surface          Subdivision Surface モディファイアを追加します。
+
+[object_custom] (モデルファイル用)
+  location, rotation           位置 [m] と XYZ Euler 角 [rad]。
+  max_dimension                最大寸法。None で元のサイズを維持します。
+  geometry_to_origin           True で複数メッシュ全体の中心を原点にします。
+  use_smooth                   メッシュをスムーズシェーディングします。
+  no_shadow                    True で影を無効化します。
+
+[shader]
+  preset                       オブジェクトごとの材質セクション名。カンマ区切り。
+
+材質プリセット
+--------------
+
+Principled BSDF の以下の数値設定に対応します:
+  subsurface, metallic, specular, specular_tint, roughness,
+  anisotropic, anisotropic_rotation, sheen, sheen_tint, clearcoat,
+  clearcoat_roughness, transmission, transmission_roughness, ior, alpha,
+  emission_strength
+
+色設定 base_color、subsurface_color、emission は RGB または RGBA の
+0–255 値です。sRGB から Blender のリニア色に変換して設定します。
+Blender 5.2 に subsurface_color 入力がない場合は base_color に反映します。
+
+テクスチャ設定:
+  color_texture, metallic_texture, specular_texture, roughness_texture,
+  sheen_texture, sheentint_texture, ior_texture
+
+各値に画像ファイルを指定します。load_uv=True かつ UV マップがある場合は
+UV を使用し、それ以外は Generated 座標の球面投影を使用します。
+specular_texture と ior_texture は旧版との互換性のため値を 10 倍します。
+
+設定例は config_samples フォルダーを参照してください。
