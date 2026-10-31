@@ -320,10 +320,12 @@ def load_job(config_path: str | Path) -> RenderJob:
     def section_values(name: str) -> dict[str, str]:
         if not parser.has_section(name):
             return {}
-        return {
+        result = {
             key.lower(): value.strip()
             for key, value in parser.items(name)
         }
+        result["_name"] = name.strip().lower()
+        return result
 
     config_dir = path.parent
     working_dir, settings_base = _resolve_working_dir(

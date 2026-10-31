@@ -210,10 +210,8 @@ def _configure_scene(scene: Any, params: dict[str, str]) -> None:
     if str2bool(params.get("disable_anti_aliasing"), default=False):
         cycles.pixel_filter_type = "GAUSSIAN"
         cycles.filter_width = 0.01
-
-    denoising = str2bool(params.get("denoising"), default=False) or str2bool(
-        params.get("denoising_legacy"), default=False
-    )
+    render.dither_intensity = float(_value(params, "dither", "0"))
+    denoising = str2bool(params.get("denoising"), default=False)
     for view_layer in scene.view_layers:
         view_layer.cycles.use_denoising = denoising
         view_layer.use_pass_normal = True
@@ -231,35 +229,21 @@ def _configure_device(scene: Any, params: dict[str, str]) -> None:
     if device == "CPU":
         scene.cycles.device = "CPU"
         return
+    if device == "GPU":
+        bpy.context.scene.render.engine = 'CYCLES'
+        preferences = bpy.context.preferences
+        addons = preferences.addons
+        cycles_preferences = addons['cycles'].preferences
+        cycles_preferences.compute_device_type = 'CUDA'
+        cycles_preferences.get_devices()
+        for device in cycles_preferences.devices:
+            if device.type == 'CUDA':
+                device.use = True
+                print(f"Enabled device: {device.name}")
+        bpy.context.scene.cycles.device = 'GPU'
+        return
     if device != "GPU":
         raise ConfigError("rendering.device must be CPU or GPU.")
-
-    cycles_addon = bpy.context.preferences.addons.get("cycles")
-    if cycles_addon is None:
-        raise RuntimeError("The Cycles add-on is not enabled in Blender preferences.")
-    preferences = cycles_addon.preferences
-    backend_property = preferences.bl_rna.properties.get("compute_device_type")
-    backend_ids = (
-        [item.identifier for item in backend_property.enum_items]
-        if backend_property is not None
-        else []
-    )
-    for backend in ("OPTIX", "CUDA", "HIP", "METAL", "ONEAPI"):
-        if backend not in backend_ids:
-            continue
-        preferences.compute_device_type = backend
-        preferences.get_devices()
-        gpu_devices = [item for item in preferences.devices if item.type != "CPU"]
-        if gpu_devices:
-            for item in preferences.devices:
-                item.use = item.type != "CPU"
-            scene.cycles.device = "GPU"
-            print(f"Using Cycles GPU backend: {backend}")
-            return
-    raise RuntimeError(
-        "rendering.device is GPU, but Blender detected no supported GPU. "
-        "Choose CPU or configure a supported Cycles device."
-    )
 
 
 def _set_camera(params: dict[str, str], scene: Any) -> Any:
@@ -334,6 +318,7 @@ def _set_sphere(params: dict[str, str], index: int, scene: Any) -> Any:
         modifier = obj.modifiers.new("Subdivision", "SUBSURF")
         modifier.render_levels = 2
     _set_shadow_visibility(obj, str2bool(params.get("no_shadow"), default=False))
+    obj.shadow_terminator_geometry_offset = 0
     if obj.name not in scene.objects:
         raise RuntimeError("Blender did not link the generated sphere to the scene.")
     return obj
@@ -422,6 +407,7 @@ def _set_custom_object(
         for mesh in meshes:
             _set_smooth(mesh)
     disabled_shadow = str2bool(params.get("no_shadow"), default=False)
+    root.shadow_terminator_geometry_offset = 0
     for mesh in meshes:
         _set_shadow_visibility(mesh, disabled_shadow)
 
@@ -445,13 +431,38 @@ def _load_texture(path: Path, *, data_map: bool) -> Any:
     return image
 
 
-def _set_material(
-    index: int,
-    params: dict[str, str],
-    meshes: list[Any],
-    working_dir: Path,
-    config_dir: Path,
-) -> None:
+def _set_lambert(index: int, params: dict[str, str], meshes: list[Any],
+                 working_dir: Path, config_dir: Path) -> None:
+    print(f"[Matrial {index}] set Diffuse BSDF instead of Principled BSDF")
+    material = bpy.data.materials.new(f"Material{index}")
+    nodes = material.node_tree.nodes
+    shader = _get_node_by_blidname(nodes, "ShaderNodeBsdfDiffuse")
+    output = _get_node_by_blidname(nodes, "ShaderNodeOutputMaterial")
+    if shader is None:
+        shader = nodes.new("ShaderNodeBsdfDiffuse")
+    if output is None:
+        output = nodes.new("ShaderNodeOutputMaterial")
+    for link in list(material.node_tree.links):
+        if link.to_node == output and link.to_socket.name == "Surface":
+            material.node_tree.links.remove(link)
+    material.node_tree.links.new(shader.outputs["BSDF"], output.inputs["Surface"])
+    for key, value in params.items():
+        if key == "roughness":
+            socket = shader.inputs.get("Roughness")
+            if socket:
+                socket.default_value = float(value)
+        elif key == "base_color":
+            socket = shader.inputs.get("Color")
+            if socket:
+                socket.default_value = _linear_color(value, setting=key)
+    for mesh in meshes:
+        if mesh.type == "MESH":
+            mesh.data.materials.clear()
+            mesh.data.materials.append(material)
+
+
+def _set_material(index: int, params: dict[str, str], meshes: list[Any],
+                  working_dir: Path, config_dir: Path) -> None:
     material = bpy.data.materials.new(f"Material{index}")
     nodes = material.node_tree.nodes
     shader = _get_node_by_blidname(nodes, "ShaderNodeBsdfPrincipled")
@@ -804,9 +815,10 @@ def _render_job(job: RenderJob) -> str:
         meshes_by_root.append(meshes)
 
     for index, (params, meshes) in enumerate(zip(job.shader_params, meshes_by_root)):
-        _set_material(
-            index, params, meshes, job.working_dir, job.config_path.parent
-        )
+        if params["_name"] in ["lambert", "lambertian"]:
+            _set_lambert(index, params, meshes, job.working_dir, job.config_path.parent)
+        else:
+            _set_material(index, params, meshes, job.working_dir, job.config_path.parent)
 
     old_compositing_group = scene.compositing_node_group
     old_use_compositing = scene.render.use_compositing
@@ -855,6 +867,7 @@ def _render_job(job: RenderJob) -> str:
         sync_hdri = multiple_views and str2bool(
             job.rendering.get("synchronize_with_views"), default=False
         )
+        save_blend_mode = job.settings.get("save_blend", "first_only").strip().replace(" ", "_").lower()
         hdri_mapping = world.node_tree.nodes.get("Render HDRI Mapping")
         for view_index, angles in enumerate(object_views, start=1):
             view_delta = _pose_matrix(angles)
@@ -886,8 +899,14 @@ def _render_job(job: RenderJob) -> str:
                 )
                 bpy.context.view_layer.update()
                 bpy.ops.render.render()
-                filepath = output_dir / f"{frame_index:03d}.blend"
-                bpy.ops.wm.save_as_mainfile(filepath=str(filepath), copy=True)
+
+                if (
+                    save_blend_mode in ["true", "all"]
+                    or (save_blend_mode == "first_only" and frame_index == 1)
+                    or (save_blend_mode == "last_only" and frame_index == len(batch))
+                ):
+                    filepath = output_dir / f"{frame_index:03d}.blend"
+                    bpy.ops.wm.save_as_mainfile(filepath=str(filepath), copy=True)
                 filepath = output_dir / f"{frame_index:03d}.png"
                 bpy.data.images["Render Result"].save_render(filepath=str(filepath))
                 filenames.append(filepath.name)
